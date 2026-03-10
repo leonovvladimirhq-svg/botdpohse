@@ -22,6 +22,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DOCUMENT_PATH = os.getenv("DOCUMENT_PATH", "FAQ_DPO_HSE_v3.docx")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 LOG_FILE = os.getenv("LOG_FILE", "questions_log.csv")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "")  # Telegram ID администратора для уведомлений
 MAX_HISTORY = 5  # Количество пар вопрос-ответ в памяти
 TELEGRAM_MSG_LIMIT = 4096  # Лимит символов в одном сообщении Telegram
 
@@ -212,6 +213,29 @@ def update_last_rating(user_id: int, rating: str):
 
 
 init_log_file()
+
+
+# --- Уведомления администратору ---
+async def notify_admin(bot, user, question: str, answer: str):
+    """Отправляет уведомление администратору о новом вопросе."""
+    if not ADMIN_CHAT_ID:
+        return
+    try:
+        username = f"@{user.username}" if user.username else "нет"
+        name = f"{user.first_name or ''} {user.last_name or ''}".strip() or "нет"
+        msg = (
+            f"📩 Новый вопрос\n\n"
+            f"👤 Пользователь: {name} ({username})\n"
+            f"🆔 ID: {user.id}\n\n"
+            f"❓ Вопрос:\n{question}\n\n"
+            f"💬 Ответ:\n{answer[:3000]}"
+        )
+        parts = split_message(msg)
+        for part in parts:
+            await bot.send_message(chat_id=ADMIN_CHAT_ID, text=part)
+    except Exception as e:
+        logger.error(f"Ошибка отправки уведомления админу: {e}")
+
 
 # --- OpenAI клиент ---
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -413,6 +437,9 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Логируем вопрос и ответ
     log_question(update.effective_user, text, answer)
 
+    # Уведомляем администратора
+    await notify_admin(context.bot, update.effective_user, text, answer)
+
     # Отправляем ответ (разбиваем если длинный)
     parts = split_message(answer)
     for i, part in enumerate(parts):
@@ -439,6 +466,17 @@ async def handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # Обновляем оценку в CSV
     update_last_rating(user_id, rating)
+
+    # Уведомляем администратора об оценке
+    if ADMIN_CHAT_ID:
+        try:
+            username = f"@{query.from_user.username}" if query.from_user.username else "нет"
+            await query.get_bot().send_message(
+                chat_id=ADMIN_CHAT_ID,
+                text=f"⭐ Оценка: {rating}\n👤 От: {username} (ID: {user_id})"
+            )
+        except Exception as e:
+            logger.error(f"Ошибка отправки оценки админу: {e}")
 
     # Меняем сообщение с кнопками на текст благодарности
     if query.data == "rate_yes":
