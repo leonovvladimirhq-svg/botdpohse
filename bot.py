@@ -250,7 +250,7 @@ def ask_question(question: str, history: list) -> str:
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=messages,
-            max_tokens=1024,
+            max_completion_tokens=1024,
             temperature=0.3,
         )
         return response.choices[0].message.content
