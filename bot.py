@@ -438,7 +438,22 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     log_question(update.effective_user, text, answer)
 
     # Уведомляем администратора
-    await notify_admin(context.bot, update.effective_user, text, answer)
+    if ADMIN_CHAT_ID:
+        try:
+            user = update.effective_user
+            username = f"@{user.username}" if user.username else "нет"
+            uname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "нет"
+            admin_msg = (
+                f"📩 Новый вопрос\n\n"
+                f"👤 Пользователь: {uname} ({username})\n"
+                f"🆔 ID: {user.id}\n\n"
+                f"❓ Вопрос:\n{text}\n\n"
+                f"💬 Ответ:\n{answer[:3000]}"
+            )
+            await context.bot.send_message(chat_id=int(ADMIN_CHAT_ID), text=admin_msg)
+            logger.info(f"Уведомление отправлено админу {ADMIN_CHAT_ID}")
+        except Exception as e:
+            logger.error(f"Ошибка отправки уведомления админу: {e}")
 
     # Отправляем ответ (разбиваем если длинный)
     parts = split_message(answer)
