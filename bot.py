@@ -1,8 +1,11 @@
 import os
 import csv
 import logging
+import json
 from pathlib import Path
 from datetime import datetime
+from urllib.request import urlopen, Request
+from urllib.error import URLError
 
 from lxml import etree
 from dotenv import load_dotenv
@@ -23,6 +26,7 @@ DOCUMENT_PATH = os.getenv("DOCUMENT_PATH", "FAQ_DPO_HSE_v3.docx")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
 LOG_FILE = os.getenv("LOG_FILE", "questions_log.csv")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "")  # Telegram ID администратора для уведомлений
+ADMIN_CHAT_ID_2 = os.getenv("ADMIN_CHAT_ID_2", "")  # Telegram ID второго администратора для дублирования
 MAX_HISTORY = 5  # Количество пар вопрос-ответ в памяти
 TELEGRAM_MSG_LIMIT = 4096  # Лимит символов в одном сообщении Telegram
 
@@ -276,7 +280,8 @@ def ask_question(question: str, history: list) -> str:
             messages=messages,
             max_completion_tokens=1024,
         )
-        return response.choices[0].message.content
+        result = response.choices[0].message.content
+        return result if result else ""
     except Exception as e:
         logger.error(f"Ошибка OpenAI: {e}")
         return f"Произошла ошибка при обработке вопроса: {e}"
@@ -411,13 +416,11 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Обработка вопроса пользователя (состояние WAITING_QUESTION)."""
     text = update.message.text
 
-    # Кнопка «Назад»
+    # Кнопка «Назад» — полный рестарт бота
     if text == BTN_BACK:
-        await update.message.reply_text(
-            "Главное меню:",
-            reply_markup=MAIN_MENU_KEYBOARD,
-        )
-        return MENU
+        # Полностью сбрасываем user_data
+        context.user_data.clear()
+        return await start(update, context)
 
     # Получаем историю диалога
     history = context.user_data.get("history", [])
@@ -428,6 +431,10 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     answer = ask_question(text, history)
 
+    # Проверяем на пустой ответ
+    if not answer or not answer.strip():
+        answer = "К сожалению, не удалось получить ответ. Попробуйте переформулировать вопрос или обратитесь к менеджеру."
+
     # Сохраняем в историю (последние MAX_HISTORY пар)
     history.append((text, answer))
     if len(history) > MAX_HISTORY:
@@ -437,23 +444,24 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Логируем вопрос и ответ
     log_question(update.effective_user, text, answer)
 
-    # Уведомляем администратора
-    if ADMIN_CHAT_ID:
-        try:
-            user = update.effective_user
-            username = f"@{user.username}" if user.username else "нет"
-            uname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "нет"
-            admin_msg = (
-                f"📩 Новый вопрос\n\n"
-                f"👤 Пользователь: {uname} ({username})\n"
-                f"🆔 ID: {user.id}\n\n"
-                f"❓ Вопрос:\n{text}\n\n"
-                f"💬 Ответ:\n{answer[:3000]}"
-            )
-            await context.bot.send_message(chat_id=int(ADMIN_CHAT_ID), text=admin_msg)
-            logger.info(f"Уведомление отправлено админу {ADMIN_CHAT_ID}")
-        except Exception as e:
-            logger.error(f"Ошибка отправки уведомления админу: {e}")
+    # Уведомляем администраторов
+    user = update.effective_user
+    username = f"@{user.username}" if user.username else "нет"
+    uname = f"{user.first_name or ''} {user.last_name or ''}".strip() or "нет"
+    admin_msg = (
+        f"📩 Новый вопрос\n\n"
+        f"👤 Пользователь: {uname} ({username})\n"
+        f"🆔 ID: {user.id}\n\n"
+        f"❓ Вопрос:\n{text}\n\n"
+        f"💬 Ответ:\n{answer[:3000]}"
+    )
+    for admin_id in (ADMIN_CHAT_ID, ADMIN_CHAT_ID_2):
+        if admin_id:
+            try:
+                await context.bot.send_message(chat_id=int(admin_id), text=admin_msg)
+                logger.info(f"Уведомление отправлено админу {admin_id}")
+            except Exception as e:
+                logger.error(f"Ошибка отправки уведомления админу {admin_id}: {e}")
 
     # Отправляем ответ (разбиваем если длинный)
     parts = split_message(answer)
@@ -482,16 +490,17 @@ async def handle_rating(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Обновляем оценку в CSV
     update_last_rating(user_id, rating)
 
-    # Уведомляем администратора об оценке
-    if ADMIN_CHAT_ID:
-        try:
-            username = f"@{query.from_user.username}" if query.from_user.username else "нет"
-            await query.get_bot().send_message(
-                chat_id=ADMIN_CHAT_ID,
-                text=f"⭐ Оценка: {rating}\n👤 От: {username} (ID: {user_id})"
-            )
-        except Exception as e:
-            logger.error(f"Ошибка отправки оценки админу: {e}")
+    # Уведомляем администраторов об оценке
+    username = f"@{query.from_user.username}" if query.from_user.username else "нет"
+    for admin_id in (ADMIN_CHAT_ID, ADMIN_CHAT_ID_2):
+        if admin_id:
+            try:
+                await query.get_bot().send_message(
+                    chat_id=int(admin_id),
+                    text=f"⭐ Оценка: {rating}\n👤 От: {username} (ID: {user_id})"
+                )
+            except Exception as e:
+                logger.error(f"Ошибка отправки оценки админу {admin_id}: {e}")
 
     # Меняем сообщение с кнопками на текст благодарности
     if query.data == "rate_yes":
@@ -514,13 +523,21 @@ def main() -> None:
 
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
+    async def back_to_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+        """Обработчик кнопки «Назад в меню» — полный рестарт."""
+        context.user_data.clear()
+        return await start(update, context)
+
     conv_handler = ConversationHandler(
         entry_points=[CommandHandler("start", start)],
         states={
             MENU: [MessageHandler(filters.TEXT & ~filters.COMMAND, menu_handler)],
             WAITING_QUESTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_question)],
         },
-        fallbacks=[CommandHandler("start", start)],
+        fallbacks=[
+            CommandHandler("start", start),
+            MessageHandler(filters.Regex(f"^{BTN_BACK}$"), back_to_start),
+        ],
     )
 
     app.add_handler(conv_handler)
@@ -533,3 +550,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
