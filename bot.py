@@ -251,7 +251,6 @@ def ask_question(question: str, history: list) -> str:
             model=OPENAI_MODEL,
             messages=messages,
             max_completion_tokens=1024,
-            temperature=0.3,
         )
         return response.choices[0].message.content
     except Exception as e:
