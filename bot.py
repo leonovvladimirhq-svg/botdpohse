@@ -305,39 +305,95 @@ def is_no_data_answer(answer: str) -> bool:
     return NO_DATA_MARKER.lower() in answer.lower()
 
 
-SUGGEST_SYSTEM_PROMPT = (
-    "Ты помогаешь пользователю переформулировать вопрос о программах "
-    "дополнительного профессионального образования НИУ ВШЭ. "
-    "Ниже приведена база FAQ. Пользователь задал вопрос, на который "
-    "по этой базе нельзя дать прямой ответ. Подбери до 3 вопросов, "
-    "которые: (а) сформулированы близко по смыслу к вопросу пользователя, "
-    "(б) точно имеют ответ в этой базе FAQ. "
-    "Не выдумывай темы, которых нет в базе. Если подходящих вопросов нет — "
-    "верни пустой список. Ответ строго в JSON вида "
-    "{\"suggestions\": [\"...\", \"...\"]}. Без какого-либо текста вне JSON.\n\n"
-    f"--- БАЗА FAQ ---\n{DOCUMENT_TEXT}\n--- КОНЕЦ БАЗЫ ---"
-)
+def extract_faq_questions(doc_text: str) -> list:
+    """Извлекает список вопросов из FAQ.
+
+    В исходном документе каждый вопрос начинается с префикса "В: " и
+    заканчивается на "?". Возвращаем чистые формулировки без префикса.
+    """
+    questions = []
+    for line in doc_text.split("\n"):
+        s = line.strip()
+        if s.startswith("В:"):
+            q = s[2:].lstrip(": ").strip()
+            if q:
+                questions.append(q)
+    return questions
+
+
+FAQ_QUESTIONS = extract_faq_questions(DOCUMENT_TEXT)
+logger.info(f"Извлечено вопросов из FAQ: {len(FAQ_QUESTIONS)}")
+
+
+def _build_suggest_messages(question: str) -> list:
+    """Готовит messages для модели: список FAQ-вопросов + вопрос пользователя."""
+    numbered = "\n".join(f"{i + 1}. {q}" for i, q in enumerate(FAQ_QUESTIONS))
+    system_prompt = (
+        "Ты помогаешь пользователю переформулировать вопрос о программах "
+        "дополнительного профессионального образования НИУ ВШЭ (Школа коммуникаций). "
+        "Ниже — список вопросов из нашего FAQ, на каждый из которых у нас есть ответ. "
+        "Пользователь задал свой вопрос — возможно, нечётко или неточно. "
+        "Твоя задача — подобрать из списка от 1 до 3 вопросов, которые ближе всего "
+        "по смыслу к запросу пользователя. Будь готов предлагать варианты, даже "
+        "если совпадение по теме приблизительное — пользователю важнее увидеть "
+        "близкие темы, чем услышать «не нашлось». "
+        "Возвращай пустой список ТОЛЬКО если запрос пользователя совершенно не "
+        "относится к темам обучения, поступления, оплаты, документов, платформы "
+        "и других тем из FAQ (например, спрашивают о погоде или политике). "
+        "Не придумывай новые вопросы — выбирай только из списка ниже, точно как они "
+        "там записаны. Ответ строго в JSON виде "
+        "{\"suggestions\": [\"...\", \"...\", \"...\"]}. Без какого-либо текста вне JSON.\n\n"
+        "--- СПИСОК ВОПРОСОВ FAQ ---\n"
+        f"{numbered}\n"
+        "--- КОНЕЦ СПИСКА ---"
+    )
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": question},
+    ]
 
 
 def suggest_reformulations(question: str, max_items: int = 3) -> list:
     """Подбирает до max_items похожих вопросов из FAQ через OpenAI."""
-    if not DOCUMENT_TEXT:
+    if not FAQ_QUESTIONS:
         return []
     try:
         response = client.chat.completions.create(
             model=OPENAI_MODEL,
-            messages=[
-                {"role": "system", "content": SUGGEST_SYSTEM_PROMPT},
-                {"role": "user", "content": question},
-            ],
-            max_completion_tokens=400,
+            messages=_build_suggest_messages(question),
+            max_completion_tokens=1024,
             response_format={"type": "json_object"},
         )
         raw = response.choices[0].message.content or "{}"
+        finish = response.choices[0].finish_reason
         data = json.loads(raw)
         items = data.get("suggestions", []) or []
         cleaned = [s.strip() for s in items if isinstance(s, str) and s.strip()]
-        return cleaned[:max_items]
+        # Оставляем только те, которые реально есть в FAQ
+        known = {q.lower(): q for q in FAQ_QUESTIONS}
+        filtered = []
+        for s in cleaned:
+            if s.lower() in known:
+                filtered.append(known[s.lower()])
+            else:
+                # Если модель чуть переформулировала — попробуем найти ближайший по
+                # подстрочному совпадению (упрощённо)
+                for q in FAQ_QUESTIONS:
+                    if s.lower() in q.lower() or q.lower() in s.lower():
+                        filtered.append(q)
+                        break
+        # Уникальные, с сохранением порядка
+        seen = set()
+        unique = []
+        for q in filtered:
+            if q not in seen:
+                seen.add(q)
+                unique.append(q)
+        logger.info(
+            f"suggest_reformulations: finish={finish}, "
+            f"raw_count={len(cleaned)}, kept={len(unique)}"
+        )
+        return unique[:max_items]
     except Exception as e:
         logger.error(f"Ошибка suggest_reformulations: {e}")
         return []
