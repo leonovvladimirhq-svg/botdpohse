@@ -39,6 +39,13 @@ BTN_MANAGER = "📞 Связаться с менеджером"
 BTN_FAQ = "📋 Часто задаваемые вопросы"
 BTN_BACK = "◀️ Назад в меню"
 
+# --- Контакты менеджеров для сценария, когда бот не смог ответить ---
+MANAGER_PHONES_TEXT = (
+    "📞 Телефоны менеджеров программ:\n"
+    "•  +7 (495) 772-95-90 (доб. 22390)\n"
+    "•  +7 (499) 281-65-10"
+)
+
 # --- Клавиатуры ---
 MAIN_MENU_KEYBOARD = ReplyKeyboardMarkup(
     [
@@ -287,6 +294,55 @@ def ask_question(question: str, history: list) -> str:
         return f"Произошла ошибка при обработке вопроса: {e}"
 
 
+# --- Детекция «нет ответа» и подбор переформулировок ---
+NO_DATA_MARKER = "нет данных по этому вопросу"  # фраза из SYSTEM_PROMPT
+
+
+def is_no_data_answer(answer: str) -> bool:
+    """Возвращает True, если ответ пустой или содержит маркер «нет данных»."""
+    if not answer or not answer.strip():
+        return True
+    return NO_DATA_MARKER.lower() in answer.lower()
+
+
+SUGGEST_SYSTEM_PROMPT = (
+    "Ты помогаешь пользователю переформулировать вопрос о программах "
+    "дополнительного профессионального образования НИУ ВШЭ. "
+    "Ниже приведена база FAQ. Пользователь задал вопрос, на который "
+    "по этой базе нельзя дать прямой ответ. Подбери до 3 вопросов, "
+    "которые: (а) сформулированы близко по смыслу к вопросу пользователя, "
+    "(б) точно имеют ответ в этой базе FAQ. "
+    "Не выдумывай темы, которых нет в базе. Если подходящих вопросов нет — "
+    "верни пустой список. Ответ строго в JSON вида "
+    "{\"suggestions\": [\"...\", \"...\"]}. Без какого-либо текста вне JSON.\n\n"
+    f"--- БАЗА FAQ ---\n{DOCUMENT_TEXT}\n--- КОНЕЦ БАЗЫ ---"
+)
+
+
+def suggest_reformulations(question: str, max_items: int = 3) -> list:
+    """Подбирает до max_items похожих вопросов из FAQ через OpenAI."""
+    if not DOCUMENT_TEXT:
+        return []
+    try:
+        response = client.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": SUGGEST_SYSTEM_PROMPT},
+                {"role": "user", "content": question},
+            ],
+            max_completion_tokens=400,
+            response_format={"type": "json_object"},
+        )
+        raw = response.choices[0].message.content or "{}"
+        data = json.loads(raw)
+        items = data.get("suggestions", []) or []
+        cleaned = [s.strip() for s in items if isinstance(s, str) and s.strip()]
+        return cleaned[:max_items]
+    except Exception as e:
+        logger.error(f"Ошибка suggest_reformulations: {e}")
+        return []
+
+
 # --- Вспомогательные функции ---
 def split_message(text: str, limit: int = TELEGRAM_MSG_LIMIT) -> list:
     """Разбивает длинное сообщение на части, не разрывая абзацы."""
@@ -431,9 +487,22 @@ async def handle_question(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     answer = ask_question(text, history)
 
-    # Проверяем на пустой ответ
-    if not answer or not answer.strip():
-        answer = "К сожалению, не удалось получить ответ. Попробуйте переформулировать вопрос или обратитесь к менеджеру."
+    # Если ответа нет — пробуем подобрать похожие вопросы из FAQ
+    if is_no_data_answer(answer):
+        suggestions = suggest_reformulations(text, max_items=3)
+        if suggestions:
+            bullets = "\n".join(f"•  {s}" for s in suggestions)
+            answer = (
+                "Возможно, вы хотели спросить:\n"
+                f"{bullets}\n\n"
+                f"{MANAGER_PHONES_TEXT}"
+            )
+        else:
+            answer = (
+                "К сожалению, не удалось получить ответ. "
+                "Попробуйте переформулировать вопрос или обратитесь к менеджеру.\n\n"
+                f"{MANAGER_PHONES_TEXT}"
+            )
 
     # Сохраняем в историю (последние MAX_HISTORY пар)
     history.append((text, answer))
