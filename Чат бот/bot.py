@@ -387,8 +387,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
             "Связаться с менеджером можно:\n\n"
             "•  Через Telegram @dposchoolcomm\n"
             "•  По электронной почте: incomm-courses@hse.ru\n"
-            "•  По телефону: +7 (495) 772-95-90 (доб. 22390)\n"
-            "•  По телефону (альтернативный): +7 (499) 281-65-10\n\n"
+            "•  По телефону: +7 (495) 772-95-90 (доб. 23644)\n\n"
             "Для оперативного ответа рекомендуется Telegram "
             "в рабочие часы (будние дни, 10:00–18:00 МСК).",
             reply_markup=MAIN_MENU_KEYBOARD,
