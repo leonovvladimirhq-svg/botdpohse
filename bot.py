@@ -23,7 +23,7 @@ load_dotenv()
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 DOCUMENT_PATH = os.getenv("DOCUMENT_PATH", "FAQ_DPO_HSE_v3.docx")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-mini")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.2")
 LOG_FILE = os.getenv("LOG_FILE", "questions_log.csv")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "")  # Telegram ID администратора для уведомлений
 ADMIN_CHAT_ID_2 = os.getenv("ADMIN_CHAT_ID_2", "")  # Telegram ID второго администратора для дублирования
