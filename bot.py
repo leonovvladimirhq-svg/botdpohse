@@ -470,8 +470,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "• Контактах и налоговом вычете\n\n"
         "Выберите один из пунктов Меню 👇\n\n"
         "📄 Если хотите изучить всю информацию самостоятельно — "
-        "ответы на часто задаваемые вопросы вы найдёте внизу веб-страницы: "
-        "https://www.hse.ru/edu/dpo/1095672316",
+        "полный документ с ответами на часто задаваемые вопросы доступен по ссылке: "
+        "https://disk.360.yandex.ru/i/tNTbuVq6Bp385A",
         reply_markup=MAIN_MENU_KEYBOARD,
     )
     return MENU
@@ -508,8 +508,8 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     # --- Кнопка 3: Часто задаваемые вопросы ---
     if text == BTN_FAQ:
         await update.message.reply_text(
-            "Ответы на часто задаваемые вопросы вы найдёте внизу веб-страницы:\n\n"
-            "https://www.hse.ru/edu/dpo/1095672316",
+            "Полный документ с ответами на часто задаваемые вопросы доступен по ссылке:\n\n"
+            "https://disk.360.yandex.ru/i/tNTbuVq6Bp385A",
             reply_markup=MAIN_MENU_KEYBOARD,
         )
         return MENU
