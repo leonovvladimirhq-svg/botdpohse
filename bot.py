@@ -260,7 +260,13 @@ SYSTEM_PROMPT = (
     "Если ответа нет в предоставленной информации, скажи: "
     "«К сожалению, у меня нет данных по этому вопросу. "
     "Рекомендую обратиться к менеджеру.» "
-    "Отвечай на языке вопроса.\n\n"
+    "Отвечай на языке вопроса. "
+    "ВАЖНО про оформление: пиши обычным текстом без любой markdown-разметки. "
+    "Не используй звёздочки (*, **), подчёркивания (_, __), решётки (#), "
+    "обратные кавычки (`), угловые скобки для тегов. Если нужно что-то "
+    "выделить — используй обычные слова или КАПС. Для списков допустимы "
+    "только дефисы (- ) или цифры (1. ). Не вставляй пустые строки между "
+    "пунктами без необходимости.\n\n"
     f"--- ИНФОРМАЦИЯ ---\n{DOCUMENT_TEXT}\n--- КОНЕЦ ИНФОРМАЦИИ ---"
 )
 
@@ -287,10 +293,32 @@ def ask_question(question: str, history: list) -> str:
             max_completion_tokens=1024,
         )
         result = response.choices[0].message.content
-        return result if result else ""
+        return strip_markdown(result) if result else ""
     except Exception as e:
         logger.error(f"Ошибка OpenAI: {e}")
         return f"Произошла ошибка при обработке вопроса: {e}"
+
+
+def strip_markdown(text: str) -> str:
+    """Удаляет markdown-разметку, которую модель иногда добавляет в ответ.
+
+    Бот шлёт сообщения как plain text (без parse_mode), поэтому **жирный**
+    и _курсив_ отображаются у пользователя как мусор со звёздочками.
+    """
+    if not text:
+        return text
+    import re
+    # **bold** / __bold__  -> bold
+    text = re.sub(r"\*\*(.+?)\*\*", r"\1", text, flags=re.DOTALL)
+    text = re.sub(r"__(.+?)__", r"\1", text, flags=re.DOTALL)
+    # *italic* / _italic_  -> italic (только парные, не задевая отдельные * в тексте)
+    text = re.sub(r"(?<!\*)\*(?!\*)([^*\n]+?)(?<!\*)\*(?!\*)", r"\1", text)
+    text = re.sub(r"(?<!_)_(?!_)([^_\n]+?)(?<!_)_(?!_)", r"\1", text)
+    # `code` -> code
+    text = re.sub(r"`([^`\n]+?)`", r"\1", text)
+    # ### headings -> plain
+    text = re.sub(r"^#{1,6}\s+", "", text, flags=re.MULTILINE)
+    return text
 
 
 # --- Детекция «нет ответа» и подбор переформулировок ---
