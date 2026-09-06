@@ -1,5 +1,5 @@
-*.pptx
+data/
 .env
 __pycache__/
 *.pyc
-data/
+questions_log.csv

@@ -1,0 +1,19 @@
+services:
+  faqbot:
+    build: .
+    image: faqbot:latest
+    container_name: faqbot
+    restart: unless-stopped
+    env_file: .env
+    # В рег. Yandex Cloud (ru-central1) DNS отдаёт для api.telegram.org только IPv6,
+    # которого на ВМ нет. Фиксируем рабочий IPv4 Bot API, иначе бот не достучится до Telegram.
+    extra_hosts:
+      - "api.telegram.org:149.154.167.220"
+    volumes:
+      # questions_log.csv переживает пересборку/рестарт контейнера
+      - ./data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

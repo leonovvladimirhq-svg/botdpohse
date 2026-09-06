@@ -1,0 +1,12 @@
+venv
+.git
+.gitignore
+__pycache__
+*.pyc
+.env
+.env.example
+_yc_apikey.json
+data
+questions_log.csv
+Чат бот
+README*.md

@@ -1,0 +1,15 @@
+services:
+  maxbot:
+    build: .
+    image: maxbot:latest
+    container_name: maxbot
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      # questions_log.csv переживает пересборку/рестарт контейнера
+      - ./data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
