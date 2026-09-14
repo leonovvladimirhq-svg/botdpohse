@@ -41,6 +41,10 @@ YANDEX_BASE_URL = os.getenv("YANDEX_BASE_URL", "https://llm.api.cloud.yandex.net
 DOCUMENT_PATH = os.getenv("DOCUMENT_PATH", "FAQ_DPO_HSE_v5.docx")
 MODEL_URI = os.getenv("MODEL_URI")
 LOG_FILE = os.getenv("LOG_FILE", "questions_log.csv")
+# Дашборд мониторинга запросов (http://89.169.146.175:8080). Если переменные
+# пустые — бот работает как раньше, ничего никуда не шлёт.
+DASHBOARD_URL = os.getenv("DASHBOARD_URL", "").rstrip("/")
+DASHBOARD_TOKEN = os.getenv("DASHBOARD_TOKEN", "")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID", "")  # MAX user_id администратора
 ADMIN_CHAT_ID_2 = os.getenv("ADMIN_CHAT_ID_2", "")  # MAX user_id второго администратора
 MAX_HISTORY = 5  # Количество пар вопрос-ответ в памяти
@@ -219,13 +223,14 @@ def init_log_file():
         logger.info(f"Создан файл лога: {LOG_FILE}")
 
 
-def log_question(user: dict, question: str, answer: str):
-    """Записывает вопрос и ответ в CSV-файл."""
+def log_question(user: dict, question: str, answer: str, latency_ms=None):
+    """Записывает вопрос и ответ в CSV-файл и отправляет событие в дашборд."""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         with _log_lock, open(LOG_FILE, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow([
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                ts,
                 user.get("user_id", ""),
                 user.get("username") or "",
                 user.get("first_name") or "",
@@ -236,6 +241,23 @@ def log_question(user: dict, question: str, answer: str):
             ])
     except Exception as e:
         logger.error(f"Ошибка записи в лог: {e}")
+
+    user_id = user.get("user_id", "")
+    full_name = " ".join(
+        p for p in [user.get("first_name") or "", user.get("last_name") or ""] if p
+    ) or (user.get("username") or "")
+    _dashboard_post({
+        "occurred_at": ts,
+        "user_ref": str(user_id),
+        "user_name": full_name,
+        "request_text": question,
+        "response_text": answer,
+        "status": "error" if "не удалось получить ответ" in answer else "ok",
+        "latency_ms": latency_ms,
+        "model": MODEL_URI or "",
+        # тот же ключ, что у импорта истории из CSV — повторов не будет
+        "dedup_key": f"{user_id}:{ts}",
+    })
 
 
 def update_last_rating(user_id: int, rating: str):
@@ -261,8 +283,83 @@ def update_last_rating(user_id: int, rating: str):
     except Exception as e:
         logger.error(f"Ошибка обновления оценки: {e}")
 
+    _dashboard_post({"op": "rate", "user_ref": str(user_id), "rating": rating})
+
+
+# --- Отправка в дашборд мониторинга ---
+def _dashboard_post(payload: dict):
+    """Шлёт событие в дашборд в фоновом потоке («выстрелил и забыл»).
+
+    Любая ошибка — только предупреждение в лог: мониторинг не имеет права
+    замедлить или уронить бота. Таймаут 5 секунд на случай, если дашборд лежит.
+    """
+    if not DASHBOARD_URL or not DASHBOARD_TOKEN:
+        return
+
+    def _send():
+        try:
+            requests.post(
+                f"{DASHBOARD_URL}/api/ingest",
+                json=payload,
+                headers={"Authorization": f"Bearer {DASHBOARD_TOKEN}"},
+                timeout=5,
+            )
+        except Exception as e:
+            logger.warning(f"Дашборд недоступен: {e}")
+
+    threading.Thread(target=_send, daemon=True).start()
+
+
+# --- Эскалация к менеджеру ---
+# Нажатие кнопки «📞 Связаться с менеджером» считается эскалацией: бот не
+# закрыл вопрос сам, человек пошёл к живому менеджеру. Пишется в отдельный CSV
+# (в questions_log.csv нельзя — update_last_rating прицепит к такой строке
+# оценку следующего ответа) и уходит в дашборд событием event_type=escalation.
+ESCALATION_LOG_FILE = os.getenv(
+    "ESCALATION_LOG_FILE",
+    str(Path(LOG_FILE).with_name("escalations_log.csv")),
+)
+
+
+def init_escalation_log_file():
+    log_path = Path(ESCALATION_LOG_FILE)
+    if not log_path.exists():
+        with open(log_path, "w", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerow(["дата_время", "user_id", "username", "имя", "фамилия"])
+        logger.info(f"Создан файл лога эскалаций: {ESCALATION_LOG_FILE}")
+
+
+def log_escalation(user: dict):
+    """Фиксирует нажатие «Связаться с менеджером»: лог, CSV, дашборд."""
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    user_id = user.get("user_id", "")
+    logger.info(f"Эскалация к менеджеру от {user_id} ({describe_user(user)})")
+    try:
+        with _log_lock, open(ESCALATION_LOG_FILE, "a", newline="", encoding="utf-8") as f:
+            csv.writer(f).writerow([
+                ts,
+                user_id,
+                user.get("username") or "",
+                user.get("first_name") or "",
+                user.get("last_name") or "",
+            ])
+    except Exception as e:
+        logger.error(f"Ошибка записи в лог эскалаций: {e}")
+
+    full_name = " ".join(
+        p for p in [user.get("first_name") or "", user.get("last_name") or ""] if p
+    ) or (user.get("username") or "")
+    _dashboard_post({
+        "event_type": "escalation",
+        "occurred_at": ts,
+        "user_ref": str(user_id),
+        "user_name": full_name,
+        "dedup_key": f"esc:{user_id}:{ts}",
+    })
+
 
 init_log_file()
+init_escalation_log_file()
 
 
 # --- Клиент MAX Bot API ---
@@ -658,7 +755,7 @@ def show_menu(user_id: int):
     )
 
 
-def handle_menu_choice(user_id: int, payload: str):
+def handle_menu_choice(user_id: int, payload: str, user: dict = None):
     """Обработка нажатий кнопок главного меню."""
     st = get_state(user_id)
 
@@ -678,6 +775,7 @@ def handle_menu_choice(user_id: int, payload: str):
     # --- Кнопка 2: Связаться с менеджером ---
     if payload == CB_MANAGER:
         st["state"] = MENU
+        log_escalation(user or {"user_id": user_id})
         bot.send_message(
             user_id,
             "Связаться с менеджером можно:\n\n"
@@ -711,7 +809,9 @@ def handle_question(user_id: int, chat_id: int, user: dict, text: str):
     if chat_id:
         bot.send_action(chat_id, "typing_on")
 
+    _t0 = time.time()
     answer = ask_question(text, history)
+    _latency_ms = int((time.time() - _t0) * 1000)
 
     # Если ответа нет — пробуем подобрать похожие вопросы из FAQ
     if is_no_data_answer(answer):
@@ -737,7 +837,7 @@ def handle_question(user_id: int, chat_id: int, user: dict, text: str):
     st["history"] = history
 
     # Логируем вопрос и ответ
-    log_question(user, text, answer)
+    log_question(user, text, answer, latency_ms=_latency_ms)
 
     # Уведомляем администраторов
     notify_admins(
@@ -839,7 +939,7 @@ def process_update(update: dict):
             return
 
         if payload in (CB_ASK, CB_MANAGER, CB_FAQ):
-            handle_menu_choice(user_id, payload)
+            handle_menu_choice(user_id, payload, user)
             return
 
         logger.warning(f"Неизвестный payload кнопки: {payload}")
@@ -903,11 +1003,11 @@ def process_update(update: dict):
         else:
             # В меню бот ждёт нажатия кнопки
             if text == BTN_ASK:
-                handle_menu_choice(user_id, CB_ASK)
+                handle_menu_choice(user_id, CB_ASK, user)
             elif text == BTN_MANAGER:
-                handle_menu_choice(user_id, CB_MANAGER)
+                handle_menu_choice(user_id, CB_MANAGER, user)
             elif text == BTN_FAQ:
-                handle_menu_choice(user_id, CB_FAQ)
+                handle_menu_choice(user_id, CB_FAQ, user)
             else:
                 show_menu(user_id)
         return

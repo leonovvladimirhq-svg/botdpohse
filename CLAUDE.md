@@ -83,12 +83,31 @@ Telegram-версия остановлена, но **не удалена** — �
   `extra_hosts: - "api.telegram.org:149.154.167.220"`.
 - Только один экземпляр поллера на токен (иначе Telegram отдаёт 409 Conflict).
 
+## Мониторинг: дашборд запросов (только MAX-версия)
+- Дашборд — отдельный сервис на ВМ `vkr-checker`: **http://89.169.146.175:8080**,
+  исходники в `C:\VKR 2\projects-dashboard` (свой репозиторий и свой CLAUDE.md).
+  Логин/пароль — в `.env` дашборда.
+- Бот шлёт события в `POST {DASHBOARD_URL}/api/ingest` с `Authorization: Bearer {DASHBOARD_TOKEN}`
+  через `_dashboard_post()` — **fire-and-forget в фоновом потоке, таймаут 5 с**. Если дашборд
+  лежит или переменные пустые, бот работает как раньше; мониторинг не имеет права его замедлить.
+- Что уходит: каждый вопрос/ответ из `log_question()` (с `latency_ms`, `model`, `dedup_key =
+  user_id:дата_время`), оценка 👍/👎 из `update_last_rating()` (`{"op":"rate"}`), и
+  **эскалация** из `log_escalation()`.
+- **Эскалация к менеджеру** = нажатие кнопки «📞 Связаться с менеджером» (`CB_MANAGER`, в том
+  числе если пользователь набрал подпись кнопки текстом). Событие `event_type: "escalation"`,
+  без текста и оценки. Локально дублируется в **отдельный** `data/escalations_log.csv` —
+  в `questions_log.csv` нельзя: `update_last_rating()` прицепил бы к такой строке оценку
+  следующего ответа. Введено 15.09.2026 по требованию заказчика как отдельная метрика.
+- Не считается эскалацией: автоматический показ контактов менеджера в `MANAGER_PHONES_TEXT`,
+  когда бот сам не нашёл ответ, — это решение бота, а не пользователя.
+
 ## Переменные окружения
 Реальные значения — вне репозитория (задаются при деплое в `.env` на сервере).
 
 - **MAX:** `MAX_TOKEN`, `MAX_API_BASE`, `YANDEX_API_KEY`, `YANDEX_BASE_URL`, `MODEL_URI`,
-  `DOCUMENT_PATH`, `LOG_FILE`, `ADMIN_CHAT_ID`, `ADMIN_CHAT_ID_2`.
-- **Telegram:** то же, но вместо `MAX_TOKEN`/`MAX_API_BASE` — `TELEGRAM_TOKEN`.
+  `DOCUMENT_PATH`, `LOG_FILE`, `ADMIN_CHAT_ID`, `ADMIN_CHAT_ID_2`,
+  `DASHBOARD_URL`, `DASHBOARD_TOKEN` (опционально `ESCALATION_LOG_FILE`).
+- **Telegram:** то же, но вместо `MAX_TOKEN`/`MAX_API_BASE` — `TELEGRAM_TOKEN`; в дашборд не шлёт.
 
 ## Инфраструктура (Yandex Cloud)
 - Каталог `project2-chatbotdpo` (`b1gvtru3guuc1oipcs4p`), зона `ru-central1-a`.
