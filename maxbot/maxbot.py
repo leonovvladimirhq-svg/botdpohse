@@ -16,6 +16,7 @@ import os
 import csv
 import json
 import time
+import hashlib
 import logging
 import threading
 from pathlib import Path
@@ -56,7 +57,11 @@ WORKERS = 4  # Одновременно обрабатываемых обнов�
 MENU, WAITING_QUESTION = range(2)
 
 # --- Тексты кнопок ---
-BTN_ASK = "❓ Задать вопрос Виртуальному помощнику (24/7)"
+# Лимит MAX — 64 символа, но на телефоне inline-кнопка обрезает подпись уже
+# после ~26–28: «❓ Задать вопрос Виртуальному помощнику (24/7)» (45) не влезала.
+# Держим подписи не длиннее «📋 Часто задаваемые вопросы» (26) — она помещается.
+BTN_ASK = "❓ Задать вопрос помощнику"
+BTN_ASK_LEGACY = "❓ Задать вопрос Виртуальному помощнику (24/7)"  # старая подпись, если наберут текстом
 BTN_MANAGER = "📞 Связаться с менеджером"
 BTN_FAQ = "📋 Часто задаваемые вопросы"
 BTN_BACK = "◀️ Назад в меню"
@@ -68,6 +73,11 @@ CB_FAQ = "menu_faq"
 CB_BACK = "menu_back"
 CB_RATE_YES = "rate_yes"
 CB_RATE_NO = "rate_no"
+# Кнопка-подсказка «возможно, вы хотели спросить»: payload = sug:<индекс в
+# FAQ_QUESTIONS>:<короткий хеш вопроса>. Индекс — потому что текст кнопки в MAX
+# ограничен 64 символами, а вопросы из FAQ бывают до 110; хеш — защита от
+# случая, когда FAQ обновили и под тем же индексом оказался другой вопрос.
+CB_SUGGEST_PREFIX = "sug:"
 
 # --- Контакты менеджеров для сценария, когда бот не смог ответить ---
 MANAGER_PHONES_TEXT = (
@@ -100,12 +110,20 @@ MAIN_MENU_KEYBOARD = kb([
     [callback_button(BTN_FAQ, CB_FAQ)],
 ])
 
-BACK_KEYBOARD = kb([[callback_button(BTN_BACK, CB_BACK)]])
+BACK_ROW = [callback_button(BTN_BACK, CB_BACK)]
+BACK_KEYBOARD = kb([BACK_ROW])
 
-RATING_KEYBOARD = kb([[
-    callback_button("👍 Полезно", CB_RATE_YES),
-    callback_button("👎 Не помогло", CB_RATE_NO),
-]])
+# В MAX кнопки живут только на том сообщении, к которому прикреплены (reply-
+# клавиатуры нет). Поэтому «Назад в меню» должна быть на КАЖДОМ последнем
+# сообщении бота — иначе после оценки пользователь остаётся без кнопок вообще
+# и вынужден листать чат вверх.
+RATING_KEYBOARD = kb([
+    [
+        callback_button("👍 Полезно", CB_RATE_YES),
+        callback_button("👎 Не помогло", CB_RATE_NO),
+    ],
+    BACK_ROW,
+])
 
 
 # --- Загрузка документа ---
@@ -646,6 +664,58 @@ def suggest_reformulations(question: str, max_items: int = 3) -> list:
         return []
 
 
+# --- Кнопки-подсказки «возможно, вы хотели спросить» ---
+# Раньше подсказки были просто текстом, и пользователю приходилось перепечатывать
+# вопрос руками — на этом терялась заметная часть людей. Теперь каждая подсказка —
+# кнопка: нажал — бот ответил на этот вопрос как на обычный.
+MAX_BUTTON_TEXT = 64  # жёсткий лимит MAX на текст кнопки
+
+
+def _question_hash(question: str) -> str:
+    return hashlib.sha1(question.encode("utf-8")).hexdigest()[:6]
+
+
+def suggestion_payload(question: str) -> str:
+    """Payload кнопки для вопроса из FAQ (или None, если вопроса в FAQ нет)."""
+    try:
+        idx = FAQ_QUESTIONS.index(question)
+    except ValueError:
+        return None
+    return f"{CB_SUGGEST_PREFIX}{idx}:{_question_hash(question)}"
+
+
+def resolve_suggestion_payload(payload: str) -> str:
+    """Возвращает текст вопроса по payload кнопки или None, если он устарел."""
+    try:
+        idx_s, h = payload[len(CB_SUGGEST_PREFIX):].split(":", 1)
+        idx = int(idx_s)
+    except (ValueError, IndexError):
+        return None
+    if not (0 <= idx < len(FAQ_QUESTIONS)):
+        return None
+    question = FAQ_QUESTIONS[idx]
+    if _question_hash(question) != h:
+        # FAQ обновили, и под этим индексом теперь другой вопрос
+        return None
+    return question
+
+
+def suggestion_keyboard(suggestions: list) -> list:
+    """Клавиатура: по кнопке на подсказку + «Назад в меню» последней строкой."""
+    rows = []
+    for n, q in enumerate(suggestions, 1):
+        payload = suggestion_payload(q)
+        if payload is None:
+            continue
+        label = f"{n}. {q}"
+        if len(label) > MAX_BUTTON_TEXT:
+            # На кнопке — начало вопроса, полный текст есть в самом сообщении
+            label = label[:MAX_BUTTON_TEXT - 1] + "…"
+        rows.append([callback_button(label, payload)])
+    rows.append(BACK_ROW)
+    return kb(rows)
+
+
 # --- Вспомогательные функции ---
 def split_message(text: str, limit: int = MAX_MSG_LIMIT) -> list:
     """Разбивает длинное сообщение на части, не разрывая абзацы."""
@@ -814,13 +884,15 @@ def handle_question(user_id: int, chat_id: int, user: dict, text: str):
     _latency_ms = int((time.time() - _t0) * 1000)
 
     # Если ответа нет — пробуем подобрать похожие вопросы из FAQ
+    suggestions = []
     if is_no_data_answer(answer):
         suggestions = suggest_reformulations(text, max_items=3)
         if suggestions:
-            bullets = "\n".join(f"•  {s}" for s in suggestions)
+            numbered = "\n".join(f"{n}. {s}" for n, s in enumerate(suggestions, 1))
             answer = (
                 "Возможно, вы хотели спросить:\n"
-                f"{bullets}\n\n"
+                f"{numbered}\n\n"
+                "Нажмите на подходящий вопрос ниже — и я сразу отвечу.\n\n"
                 f"{MANAGER_PHONES_TEXT}"
             )
         else:
@@ -851,16 +923,20 @@ def handle_question(user_id: int, chat_id: int, user: dict, text: str):
     # Отправляем ответ (разбиваем если длинный)
     parts = split_message(answer)
     for i, part in enumerate(parts):
-        if i == len(parts) - 1:
-            # Последняя часть — с кнопкой возврата в меню
+        if i < len(parts) - 1:
+            bot.send_message(user_id, part)
+        elif suggestions:
+            # Подсказки — кнопками. Оценку не спрашиваем: это ещё не ответ,
+            # а следующий шаг; нажатие на подсказку и есть полезный сигнал.
+            bot.send_message(user_id, part, attachments=suggestion_keyboard(suggestions))
+        else:
+            # Последняя часть — с кнопкой возврата в меню, затем оценка
             bot.send_message(user_id, part, attachments=BACK_KEYBOARD)
             bot.send_message(
                 user_id,
                 "Был ли ответ полезен?",
                 attachments=RATING_KEYBOARD,
             )
-        else:
-            bot.send_message(user_id, part)
 
 
 def handle_rating(user_id: int, user: dict, payload: str, callback_id: str):
@@ -882,7 +958,9 @@ def handle_rating(user_id: int, user: dict, payload: str, callback_id: str):
         )
     bot.answer_callback(
         callback_id,
-        message={"text": new_text, "attachments": []},
+        # Кнопки оценки убираем, но «Назад в меню» оставляем — иначе это
+        # последнее сообщение в чате остаётся без единой кнопки.
+        message={"text": new_text, "attachments": BACK_KEYBOARD},
     )
 
     # Уведомляем администраторов об оценке
@@ -942,6 +1020,24 @@ def process_update(update: dict):
             handle_menu_choice(user_id, payload, user)
             return
 
+        # Кнопка-подсказка «возможно, вы хотели спросить»
+        if payload and payload.startswith(CB_SUGGEST_PREFIX):
+            question = resolve_suggestion_payload(payload)
+            if question is None:
+                bot.send_message(
+                    user_id,
+                    "Этот вариант уже неактуален — задайте вопрос текстом, пожалуйста.",
+                    attachments=BACK_KEYBOARD,
+                )
+                return
+            # Callback-кнопка не оставляет в чате «сообщения от пользователя»,
+            # поэтому показываем, какой вопрос выбран, — иначе ответ повисает без
+            # контекста. Дальше — обычный путь вопроса: модель, лог, дашборд, оценка.
+            get_state(user_id)["state"] = WAITING_QUESTION
+            bot.send_message(user_id, f"❓ {question}")
+            handle_question(user_id, chat_id, user, question)
+            return
+
         logger.warning(f"Неизвестный payload кнопки: {payload}")
         return
 
@@ -985,6 +1081,7 @@ def process_update(update: dict):
                 bot.send_message(
                     user_id,
                     f"Ваш MAX ID: {user_id}\nchat_id: {chat_id}",
+                    attachments=BACK_KEYBOARD,
                 )
                 return
             # Неизвестная команда — ведём себя как при обычном тексте
@@ -1002,7 +1099,7 @@ def process_update(update: dict):
             handle_question(user_id, chat_id, user, text)
         else:
             # В меню бот ждёт нажатия кнопки
-            if text == BTN_ASK:
+            if text in (BTN_ASK, BTN_ASK_LEGACY):
                 handle_menu_choice(user_id, CB_ASK, user)
             elif text == BTN_MANAGER:
                 handle_menu_choice(user_id, CB_MANAGER, user)
