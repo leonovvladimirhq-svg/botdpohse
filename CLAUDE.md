@@ -78,9 +78,20 @@ Telegram-версия остановлена, но **не удалена** — �
   404 `dialog.not.found`, а сломанный — 400 `proto.payload` («Can't deserialize body»).
 
 ## Специфика Telegram Bot API (для резервной версии)
-- В `ru-central1` `api.telegram.org` резолвится только в IPv6, которого на ВМ нет.
-  Рабочий IPv4 Bot API закреплён в `docker-compose.yml`:
-  `extra_hosts: - "api.telegram.org:149.154.167.220"`.
+- **С сентября 2026 `api.telegram.org` с российских серверов недоступен вообще** — ТСПУ
+  режет все подсети Telegram на исходящем (проверено 21.09.2026 с ВМ `faqbot`: 149.154.167.220,
+  149.154.166.110, 149.154.167.99, 91.108.56.100 — таймаут). Летний пин IPv4 в `extra_hosts`
+  мёртв и из `docker-compose.yml` убран. Webhook не поможет (блок двусторонний), смена облака
+  не поможет (то же у Selectel/Reg.ru).
+- **Решение — релей за пределами РФ** (`relay/`): reverse-proxy nginx в Yandex Cloud kz1
+  (Казахстан) + long polling. Бот читает `TELEGRAM_RELAY_URL` и подставляет его в
+  `Application.builder().base_url()/base_file_url()` (PTB 21.6 сам дописывает токен).
+  База, лог и обращения к AI Studio остаются в РФ; релей ничего не хранит, тела не логирует,
+  принимает только с IP бэкенда. Подробности, юридический контекст и порядок покупки ВМ —
+  `relay/README.md`; сама установка — `relay/install-relay.sh` (одна команда).
+- **Yandex Cloud Казахстан — отдельная инсталляция** (`kz.console.yandex.cloud`,
+  `api.yandexcloud.kz`, свой биллинг и IAM). Наш СА `leonov-deployer` там не существует —
+  ВМ релея создаёт владелец облака вручную, затем передаёт IP.
 - Только один экземпляр поллера на токен (иначе Telegram отдаёт 409 Conflict).
 
 ## Мониторинг: дашборд запросов (только MAX-версия)
@@ -107,7 +118,8 @@ Telegram-версия остановлена, но **не удалена** — �
 - **MAX:** `MAX_TOKEN`, `MAX_API_BASE`, `YANDEX_API_KEY`, `YANDEX_BASE_URL`, `MODEL_URI`,
   `DOCUMENT_PATH`, `LOG_FILE`, `ADMIN_CHAT_ID`, `ADMIN_CHAT_ID_2`,
   `DASHBOARD_URL`, `DASHBOARD_TOKEN` (опционально `ESCALATION_LOG_FILE`).
-- **Telegram:** то же, но вместо `MAX_TOKEN`/`MAX_API_BASE` — `TELEGRAM_TOKEN`; в дашборд не шлёт.
+- **Telegram:** то же, но вместо `MAX_TOKEN`/`MAX_API_BASE` — `TELEGRAM_TOKEN` и
+  `TELEGRAM_RELAY_URL` (`https://<хост релея>`, пусто = напрямую); в дашборд не шлёт.
 
 ## Инфраструктура (Yandex Cloud)
 - Каталог `project2-chatbotdpo` (`b1gvtru3guuc1oipcs4p`), зона `ru-central1-a`.
@@ -126,22 +138,25 @@ Telegram-бот остановлен командой `docker compose stop` — 
 Политика `restart: unless-stopped` означает, что вручную остановленный контейнер
 **не поднимется сам** после перезагрузки ВМ.
 
-Поднять обратно:
-```bash
-ssh -i ~/.ssh/yc_faqbot_key yc-user@89.169.142.74
-cd /opt/faqbot && sudo docker compose start
-sudo docker logs -f faqbot        # ждём "Бот запущен!" и getUpdates 200
-```
+**Просто `docker compose start` больше не поможет** — без релея бот не достучится до
+Telegram (см. «Специфика Telegram Bot API»). Порядок восстановления теперь такой:
+1. Релей в Yandex Cloud kz1 поднят по `relay/README.md` (ВМ покупает владелец облака,
+   установка — `relay/install-relay.sh <IP бэкенда>`).
+2. На ВМ `faqbot` в `/opt/faqbot/.env` добавить `TELEGRAM_RELAY_URL=https://<хост релея>`,
+   залить обновлённые `bot.py` и `docker-compose.yml` из этого репозитория.
+3. `cd /opt/faqbot && sudo docker compose up -d --build`, затем
+   `sudo docker logs -f faqbot` — ждём «Telegram Bot API через релей: …» и getUpdates 200.
 
-Если контейнера или образа уже нет (ВМ пересоздали, `docker system prune`) — пересобрать
-из этого репозитория: скопировать корневые файлы в `/opt/faqbot`, создать `.env`
-по `.env.example` и выполнить `sudo docker compose up -d --build`.
+Контейнер, образ `faqbot:latest`, `/opt/faqbot/.env` с токеном и CSV-лог на ВМ сохранены
+(остановка 06.09.2026 через `docker compose stop`).
 
 **Что может помешать восстановлению:**
 - Токен бота BotFather не протухает от простоя — сам по себе он останется валидным.
-- Реальный риск — сетевой: пин `149.154.167.220` может перестать работать, если блокировки
-  ужесточат. Тогда понадобится прокси вне РФ (PTB 21.x поддерживает `proxy`).
+- Релей недоступен/лёг — `faqbot` уйдёт в перезапуск по `restart: unless-stopped`; MAX-бот
+  (`maxbot`) это не затрагивает, контейнеры независимы.
 - Одновременно с восстановлением нельзя держать второй поллер на том же токене — 409 Conflict.
+- Юридически: заключение по ч. 8 ст. 10 149-ФЗ и уведомление РКН о трансграничной передаче
+  (см. записку и `relay/README.md`) — до запуска в эксплуатацию.
 
 ## Безопасность
 - Секреты (токены ботов, API-ключ, chat_id админов) — только в `.env` на сервере,

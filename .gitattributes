@@ -1,0 +1,4 @@
+# Shell-скрипты уезжают на Linux через scp — на Windows они не должны превращаться в CRLF.
+*.sh text eol=lf
+Dockerfile text eol=lf
+docker-compose.yml text eol=lf

@@ -21,6 +21,12 @@ from telegram.ext import (
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+# Релей Bot API за пределами РФ (см. relay/README.md и аналитическую записку).
+# С сентября 2026 api.telegram.org с российских серверов недоступен (ТСПУ), поэтому
+# бот ходит в Telegram через reverse-proxy в Yandex Cloud kz1: TELEGRAM_RELAY_URL —
+# это «https://<хост релея>» без пути. Пусто = прямое подключение, как раньше.
+# База, лог и обращения к Yandex AI Studio остаются в РФ; релей ничего не хранит.
+TELEGRAM_RELAY_URL = os.getenv("TELEGRAM_RELAY_URL", "").rstrip("/")
 YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_BASE_URL = os.getenv("YANDEX_BASE_URL", "https://llm.api.cloud.yandex.net/v1")
 DOCUMENT_PATH = os.getenv("DOCUMENT_PATH", "FAQ_DPO_HSE_v3.docx")
@@ -678,7 +684,18 @@ def main() -> None:
         print("Ошибка: MODEL_URI не задан. Проверьте файл .env")
         return
 
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    builder = Application.builder().token(TELEGRAM_TOKEN)
+    if TELEGRAM_RELAY_URL:
+        # PTB сам дописывает токен: base_url + token → https://<релей>/bot<token>/getUpdates
+        builder = (
+            builder
+            .base_url(f"{TELEGRAM_RELAY_URL}/bot")
+            .base_file_url(f"{TELEGRAM_RELAY_URL}/file/bot")
+        )
+        logger.info(f"Telegram Bot API через релей: {TELEGRAM_RELAY_URL}")
+    else:
+        logger.info("Telegram Bot API напрямую (api.telegram.org)")
+    app = builder.build()
 
     async def back_to_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         """Обработчик кнопки «Назад в меню» — полный рестарт."""

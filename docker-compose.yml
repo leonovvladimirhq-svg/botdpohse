@@ -5,10 +5,11 @@ services:
     container_name: faqbot
     restart: unless-stopped
     env_file: .env
-    # В рег. Yandex Cloud (ru-central1) DNS отдаёт для api.telegram.org только IPv6,
-    # которого на ВМ нет. Фиксируем рабочий IPv4 Bot API, иначе бот не достучится до Telegram.
-    extra_hosts:
-      - "api.telegram.org:149.154.167.220"
+    # Раньше здесь был пин api.telegram.org → 149.154.167.220 (в ru-central1 DNS
+    # отдавал только IPv6). С сентября 2026 ТСПУ режет ВСЕ подсети Telegram с
+    # российских серверов, и пин мёртв. Бот ходит в Bot API через релей за пределами
+    # РФ — TELEGRAM_RELAY_URL в .env (см. relay/README.md). Прямых обращений к
+    # api.telegram.org с этой ВМ больше нет, extra_hosts не нужен.
     volumes:
       # questions_log.csv переживает пересборку/рестарт контейнера
       - ./data:/data
