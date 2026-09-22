@@ -21,11 +21,12 @@ from telegram.ext import (
 load_dotenv()
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-# Релей Bot API за пределами РФ (см. relay/README.md и аналитическую записку).
-# С сентября 2026 api.telegram.org с российских серверов недоступен (ТСПУ), поэтому
-# бот ходит в Telegram через reverse-proxy в Yandex Cloud kz1: TELEGRAM_RELAY_URL —
-# это «https://<хост релея>» без пути. Пусто = прямое подключение, как раньше.
-# База, лог и обращения к Yandex AI Studio остаются в РФ; релей ничего не хранит.
+# Точка подключения к Bot API. С сентября 2026 api.telegram.org недоступен с любого
+# российского сервера (ТСПУ фильтрует по имени/подсетям Telegram, а не по нашему IP —
+# проверено на 4 ВМ в разных каталогах и подсетях, результат идентичный). Поэтому для
+# работы Telegram-канала нужен внешний хоп: TELEGRAM_RELAY_URL = «https://<хост>» без
+# пути. Чем он реализован — не важно, бот просто подставляет его вместо api.telegram.org.
+# Пусто = прямое подключение (сейчас не работает, но код прежний).
 TELEGRAM_RELAY_URL = os.getenv("TELEGRAM_RELAY_URL", "").rstrip("/")
 YANDEX_API_KEY = os.getenv("YANDEX_API_KEY")
 YANDEX_BASE_URL = os.getenv("YANDEX_BASE_URL", "https://llm.api.cloud.yandex.net/v1")
