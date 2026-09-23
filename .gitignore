@@ -3,3 +3,6 @@
 __pycache__/
 *.pyc
 data/
+
+# Локальный кэш wrangler (данные аккаунта Cloudflare)
+.wrangler/

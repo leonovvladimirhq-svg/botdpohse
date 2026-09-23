@@ -95,6 +95,9 @@ Telegram-версия остановлена, но **не удалена** — �
   `TELEGRAM_RELAY_URL` (`https://<хост>` без пути), бот подставляет её в
   `Application.builder().base_url()/base_file_url()` (PTB 21.6 сам дописывает токен).
   База, лог и обращения к AI Studio в любом случае остаются в РФ.
+- ✅ **РАЗВЁРНУТО 23.09.2026:** `https://tg-relay-dpo.leonov-vladimir-hq.workers.dev`
+  (аккаунт `leonov.vladimir.hq@gmail.com`). Telegram-бот `@hse_dpo_faq_bot` поднят через
+  него и работает: `getUpdates … 200 OK`. Деплой — `cd relay && npx wrangler deploy`.
 - **Выбранная реализация — Cloudflare Worker** (`relay/worker.js`), без аренды ВМ:
   вариант с ВМ в Казахстане заказчик отклонил 22.09.2026. Доступность платформы из
   Yandex Cloud проверена (`workers.dev` → 0,59 с). Worker проверяет `CF-Connecting-IP`
