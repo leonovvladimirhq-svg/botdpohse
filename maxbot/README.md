@@ -5,7 +5,7 @@
 переписан только транспортный слой.
 
 - **Бот в MAX:** «Чат-Бот ДПО Школа Коммуникаций» (`@se14233220_bot`, `user_id` 412305012)
-- **Хостинг:** Yandex Cloud, каталог `project2-chatbotdpo`, ВМ `faqbot` (`89.169.142.74`)
+- **Хостинг:** Yandex Cloud, каталог `project2-chatbotdpo`, ВМ `faqbot` (`93.77.187.243`, статический)
 - **Каталог на сервере:** `/opt/maxbot`, контейнер `maxbot`
 
 ---
@@ -142,7 +142,7 @@ Telegram-идентификаторы администраторов в MAX не
 ## Деплой
 
 ```bash
-ssh -i ~/.ssh/yc_faqbot_key yc-user@89.169.142.74
+ssh -i ~/.ssh/yc_faqbot_key yc-user@93.77.187.243
 cd /opt/maxbot
 sudo docker compose up -d --build
 ```
@@ -150,8 +150,8 @@ sudo docker compose up -d --build
 Обновление кода с локальной машины:
 
 ```bash
-scp -i ~/.ssh/yc_faqbot_key maxbot.py yc-user@89.169.142.74:/opt/maxbot/
-ssh -i ~/.ssh/yc_faqbot_key yc-user@89.169.142.74 "cd /opt/maxbot && sudo docker compose up -d --build"
+scp -i ~/.ssh/yc_faqbot_key maxbot.py yc-user@93.77.187.243:/opt/maxbot/
+ssh -i ~/.ssh/yc_faqbot_key yc-user@93.77.187.243 "cd /opt/maxbot && sudo docker compose up -d --build"
 ```
 
 ---

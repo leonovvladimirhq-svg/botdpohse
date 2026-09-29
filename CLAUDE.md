@@ -143,9 +143,12 @@ FAQ-помощник по программам ДПО Школы коммуни�
 ## Инфраструктура (Yandex Cloud)
 - Каталог `project2-chatbotdpo` (`b1gvtru3guuc1oipcs4p`), зона `ru-central1-a`.
 - ВМ `faqbot`, Ubuntu 22.04, 2 vCPU (core-fraction 5) / 1 ГБ RAM / 10 ГБ HDD, swap 2 ГБ.
-  Не preemptible. Внешний IP **89.169.142.74** (менялся: ранее был 158.160.50.225 —
-  проверяйте `yc compute instance list` перед подключением).
-- SSH: `yc-user@89.169.142.74`, ключ `~/.ssh/yc_faqbot_key`.
+  Не preemptible. Внешний IP **93.77.187.243 — статический** (зарезервирован 29.09.2026,
+  адрес `faqbot-static-ip`, `e9bgc9a6nhebh8avds4h`). До этого IP был динамическим и менялся
+  при каждой остановке ВМ (158.160.50.225 → 89.169.142.74 → 93.77.187.243); смена 26.09.2026
+  на три дня уронила Telegram-канал, потому что релей пускает только `ALLOWED_IPS`.
+  **Не снимать резервирование** — иначе проблема вернётся.
+- SSH: `yc-user@93.77.187.243`, ключ `~/.ssh/yc_faqbot_key`.
 - Каталоги на сервере: `/opt/maxbot` (MAX) и `/opt/faqbot` (Telegram).
 - Оба compose-проекта независимы, у каждого свой том `./data` с `questions_log.csv`.
 - Режим long polling — нужен только исходящий доступ, входящих портов не требуется.
@@ -155,7 +158,7 @@ FAQ-помощник по программам ДПО Школы коммуни�
 Канал работает с 23.09.2026 через релей. Выключить/включить:
 
 ```bash
-ssh -i ~/.ssh/yc_faqbot_key yc-user@89.169.142.74
+ssh -i ~/.ssh/yc_faqbot_key yc-user@93.77.187.243
 cd /opt/faqbot && sudo docker compose stop     # выключить (MAX не затрагивается)
 cd /opt/faqbot && sudo docker compose start    # включить обратно
 sudo docker logs -f faqbot                     # «Telegram Bot API через релей: …», getUpdates 200
@@ -166,8 +169,15 @@ CSV-лог. При этом `restart: unless-stopped` + ручная остан�
 сам** после перезагрузки ВМ, это ожидаемо.
 
 **Если канал перестал работать:**
-- **403 на каждый запрос в логе** — сменился IP ВМ; поправить `ALLOWED_IPS` в
-  `relay/wrangler.toml` и передеплоить Worker (`cd relay && npx wrangler deploy`).
+- **`TelegramError: Invalid server response`, `faqbot` в цикле Restarting** — релей отвечает
+  403 текстом («этот IP не в списке разрешённых»), PTB не может разобрать его как JSON.
+  Значит, IP ВМ не совпадает с `ALLOWED_IPS` (статический IP сняли или ВМ пересоздали):
+  поправить `ALLOWED_IPS` в `relay/wrangler.toml` и передеплоить Worker
+  (`cd relay && npx wrangler deploy`). Быстрая проверка с ВМ:
+  `curl https://tg-relay-dpo.leonov-vladimir-hq.workers.dev/check` — 403 = IP не пускают,
+  404 «Ожидается путь…» = IP в порядке.
+- **wrangler: «In a non-interactive environment, it's necessary to set a CLOUDFLARE_API_TOKEN»** —
+  истёк OAuth-токен. `npx wrangler whoami` его обновляет, после этого `deploy` проходит.
 - **Релей недоступен** — `faqbot` уйдёт в перезапуск по `restart: unless-stopped`;
   MAX-бот (`maxbot`) это не затрагивает, контейнеры независимы.
 - **409 Conflict** — где-то запущен второй поллер на том же токене; должен быть один.

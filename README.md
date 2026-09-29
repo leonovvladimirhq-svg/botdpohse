@@ -154,14 +154,14 @@ python maxbot.py                               # для Telegram-версии: p
 ## Деплой на Yandex Cloud
 
 - **Облако:** Yandex Cloud, каталог `project2-chatbotdpo`, зона `ru-central1-a`.
-- **ВМ:** `faqbot`, Ubuntu 22.04, внешний IP `89.169.142.74` (менялся — сверяйтесь
-  с `yc compute instance list`). SSH-ключ `~/.ssh/yc_faqbot_key`.
+- **ВМ:** `faqbot`, Ubuntu 22.04, внешний IP `93.77.187.243` — статический (зарезервирован
+  29.09.2026, раньше менялся при перезапуске ВМ). SSH-ключ `~/.ssh/yc_faqbot_key`.
 - **Каталоги:** `/opt/maxbot` (MAX) и `/opt/faqbot` (Telegram) — независимые compose-проекты.
 - **Режим:** long polling (только исходящие подключения, входящих портов не нужно).
 
 ```bash
-scp -i ~/.ssh/yc_faqbot_key maxbot/maxbot.py yc-user@89.169.142.74:/opt/maxbot/
-ssh -i ~/.ssh/yc_faqbot_key yc-user@89.169.142.74
+scp -i ~/.ssh/yc_faqbot_key maxbot/maxbot.py yc-user@93.77.187.243:/opt/maxbot/
+ssh -i ~/.ssh/yc_faqbot_key yc-user@93.77.187.243
 cd /opt/maxbot && sudo docker compose up -d --build
 ```
 
@@ -188,7 +188,7 @@ cd /opt/maxbot && sudo docker compose up -d --build
 #    (см. relay/README.md — там же грабли первого деплоя)
 # 2. На ВМ бота: обновить bot.py и docker-compose.yml из репозитория,
 #    в /opt/faqbot/.env добавить TELEGRAM_RELAY_URL=https://<адрес>.workers.dev
-ssh -i ~/.ssh/yc_faqbot_key yc-user@89.169.142.74
+ssh -i ~/.ssh/yc_faqbot_key yc-user@93.77.187.243
 cd /opt/faqbot && sudo docker compose up -d --build
 sudo docker logs -f faqbot        # ждём "Telegram Bot API через релей: …" и getUpdates 200 OK
 ```
