@@ -809,7 +809,7 @@ def send_welcome(user_id: int, user: dict):
         "Выберите один из пунктов Меню 👇\n\n"
         "📄 Если хотите изучить всю информацию самостоятельно — "
         "полный документ с ответами на часто задаваемые вопросы доступен по ссылке: "
-        "https://disk.360.yandex.ru/i/tNTbuVq6Bp385A",
+        "https://disk.yandex.ru/i/b0hBdX16YfwFBQ",
         attachments=MAIN_MENU_KEYBOARD,
     )
 
@@ -864,7 +864,7 @@ def handle_menu_choice(user_id: int, payload: str, user: dict = None):
         bot.send_message(
             user_id,
             "Полный документ с ответами на часто задаваемые вопросы доступен по ссылке:\n\n"
-            "https://disk.360.yandex.ru/i/tNTbuVq6Bp385A",
+            "https://disk.yandex.ru/i/b0hBdX16YfwFBQ",
             attachments=MAIN_MENU_KEYBOARD,
         )
         return

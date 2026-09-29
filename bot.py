@@ -509,7 +509,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         "Выберите один из пунктов Меню 👇\n\n"
         "📄 Если хотите изучить всю информацию самостоятельно — "
         "полный документ с ответами на часто задаваемые вопросы доступен по ссылке: "
-        "https://disk.360.yandex.ru/i/tNTbuVq6Bp385A",
+        "https://disk.yandex.ru/i/b0hBdX16YfwFBQ",
         reply_markup=MAIN_MENU_KEYBOARD,
     )
     return MENU
@@ -547,7 +547,7 @@ async def menu_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     if text == BTN_FAQ:
         await update.message.reply_text(
             "Полный документ с ответами на часто задаваемые вопросы доступен по ссылке:\n\n"
-            "https://disk.360.yandex.ru/i/tNTbuVq6Bp385A",
+            "https://disk.yandex.ru/i/b0hBdX16YfwFBQ",
             reply_markup=MAIN_MENU_KEYBOARD,
         )
         return MENU
