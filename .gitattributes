@@ -2,3 +2,5 @@
 *.sh text eol=lf
 Dockerfile text eol=lf
 docker-compose.yml text eol=lf
+# Python-код сверяется с сервером по md5 — на Windows-клоне CRLF давал бы ложные расхождения.
+*.py text eol=lf
