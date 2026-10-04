@@ -1,7 +1,0 @@
-.env
-__pycache__/
-*.pyc
-*.pyo
-questions_log.csv
-*.docx
-*.pptx
