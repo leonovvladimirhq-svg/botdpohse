@@ -1,196 +1,122 @@
 # CLAUDE.md — Чат-Бот ДПО Школа коммуникаций НИУ ВШЭ
 
-Техническая справка для разработки и сопровождения. Пользовательская документация — в [README.md](./README.md).
+Правила для ИИ-ассистента. Что это за проект и как его обслуживать человеку — [README.md](README.md).
+FAQ-бот: отвечает **строго по** `FAQ_DPO_HSE_v5.docx` через Qwen 3.6 35B (Yandex AI Studio).
+Два канала, одна продуктовая логика: **MAX** (`maxbot/maxbot.py`, основной) и **Telegram**
+(`bot.py`, дополнительный, через посредника `relay/`).
 
-## Описание
-FAQ-помощник по программам ДПО Школы коммуникаций НИУ ВШЭ. Отвечает на вопросы строго
-по базе знаний (`.docx`-FAQ), используя **Qwen 3.6 35B через Yandex AI Studio**.
+## Карта документации (один факт — одно место)
 
-Существует в двух версиях с одинаковой продуктовой логикой:
+| Тема | Где |
+|---|---|
+| Сервисы, аккаунты, ключи, перевыпуск | [docs/SERVICES.md](docs/SERVICES.md) |
+| Восстановление, откат, где бэкапы | [docs/RESTORE.md](docs/RESTORE.md) |
+| Почему так сделано, юридические вопросы | [docs/DECISIONS.md](docs/DECISIONS.md) |
+| История по датам | [docs/CHANGELOG.md](docs/CHANGELOG.md) |
+| Bot API MAX: отличия, коды ошибок | [maxbot/README.md](maxbot/README.md) |
+| Релей Telegram: деплой, диагностика | [relay/README.md](relay/README.md) |
+| Переменные окружения | `.env.example`, `maxbot/.env.example` |
+| Неполадки и типовые задачи | [README.md](README.md) |
 
-| Версия | Каталог | Статус (2026-09-23) | Контейнер |
-|---|---|---|---|
-| **MAX** (основной канал) | [`maxbot/`](./maxbot/) | 🟢 работает | `maxbot` |
-| **Telegram** (дополнительный) | корень репозитория | 🟢 работает через релей | `faqbot` |
+Меняешь поведение или инфраструктуру — допиши `docs/CHANGELOG.md`; принял решение с
+«почему» — `docs/DECISIONS.md`. Не дублируй факт в нескольких документах — ставь ссылку.
 
-Оба канала подняты на одной ВМ независимыми compose-проектами. Telegram с 06.09 по
-23.09.2026 был остановлен (недоступен api.telegram.org из РФ) и снова работает через
-посредник на Cloudflare Workers — см. [`relay/`](./relay/) и раздел
-[«Специфика Telegram Bot API»](#специфика-telegram-bot-api).
+## Стек
+- Python 3.11, Docker Compose, long polling (входящих портов нет).
+- MAX: свой клиент `MaxBot` на `requests` (без SDK). Telegram: `python-telegram-bot` 21.6.
+- Модель: пакет `openai` → `https://llm.api.cloud.yandex.net/v1`, `MODEL_URI=gpt://<folder>/qwen3.6-35b-a3b/latest`.
+- FAQ парсится `python-docx` (текст + таблицы + URL гиперссылок) и целиком кладётся в system prompt.
+- Релей: Cloudflare Worker (`relay/worker.js`), деплой `wrangler`.
 
-## Технологический стек
-- **Язык:** Python 3.11.
-- **Транспорт MAX:** прямые HTTP-вызовы Bot API через `requests` (класс `MaxBot` в `maxbot.py`), long polling.
-- **Транспорт Telegram:** `python-telegram-bot` v21, long polling.
-- **Модель:** Qwen 3.6 35B через **Yandex AI Studio** (OpenAI-совместимый эндпоинт; клиент — пакет `openai`).
-- **База знаний:** `.docx` (парсинг через `python-docx`), целиком кладётся в system prompt.
-- **Лог:** `questions_log.csv` (вопрос, ответ, оценка) + дублирование админам в мессенджер.
-- **Деплой:** Docker (`docker compose`) на **Yandex Cloud**.
+## Где что работает
+- ВМ `faqbot`, Yandex Cloud, каталог `project2-chatbotdpo` (`b1gvtru3guuc1oipcs4p`), `ru-central1-a`.
+- IP **93.77.187.243, статический** (`faqbot-static-ip`). Не снимать резервирование — ляжет Telegram.
+- SSH: `ssh -i ~/.ssh/yc_faqbot_key yc-user@93.77.187.243`.
+- `/opt/maxbot` → контейнер `maxbot`; `/opt/faqbot` → контейнер `faqbot`. У каждого свой `.env` и `./data`.
+- Если SSH не отвечает — сначала `yc compute instance list --folder-id b1gvtru3guuc1oipcs4p`.
 
-## Структура
-```
-├── maxbot/                # ОСНОВНАЯ версия (мессенджер MAX)
-│   ├── maxbot.py          # Клиент MAX API + вся логика бота
-│   ├── FAQ_DPO_HSE_v5.docx
-│   ├── Dockerfile, docker-compose.yml, requirements.txt, .env.example
-│   └── README.md          # Подробности по MAX-версии
-├── bot.py                 # РЕЗЕРВНАЯ версия (Telegram)
-├── FAQ_DPO_HSE_v5.docx    # Актуальная база знаний
-├── Dockerfile, docker-compose.yml, requirements.txt, .env.example
-└── Чат бот/               # Историческая копия, на прод не используется
-```
-
-> ⚠️ **База знаний лежит в двух местах**: `FAQ_DPO_HSE_v5.docx` в корне (для Telegram-версии)
-> и `maxbot/FAQ_DPO_HSE_v5.docx` (для MAX-версии). Так сделано, чтобы каждый каталог был
-> самодостаточным контекстом сборки Docker. **При обновлении FAQ меняйте оба файла.**
-
-## Ключевые функции (одинаковы в обеих версиях)
-- `load_document()` — `.docx` → текст (с таблицами и гиперссылками) для system prompt.
-- `ask_question(question, history)` — основной вызов модели (system prompt = FAQ, история ≤5 Q&A).
-- `suggest_reformulations(question)` — подбор близких вопросов из FAQ (JSON-режим, `response_format`).
-- `strip_markdown()` — чистит markdown из ответа (бот шлёт plain text).
-- `split_message()` — режет длинные ответы по границам абзацев.
-
-## Интеграция с моделью (Yandex AI Studio)
-- OpenAI-совместимый эндпоинт: `YANDEX_BASE_URL=https://llm.api.cloud.yandex.net/v1`.
-- Модель: `MODEL_URI=gpt://<folder-id>/qwen3.6-35b-a3b/latest`.
-- Аутентификация: API-ключ сервисного аккаунта Yandex Cloud (`YANDEX_API_KEY`).
-- **Важно:** Qwen 3.6 35B — reasoning-модель. В запросы передаётся
-  `extra_body={"reasoning_effort": "none"}`, иначе модель тратит весь бюджет токенов
-  на «размышления» и возвращает пустой `content` (`finish_reason=length`).
-- Модель Gallery (Qwen) активируется **пер-каталог**, иначе 403 даже при роли editor.
-
-## Специфика MAX Bot API
-- **Домен — только `https://botapi.max.ru`.** Документация называет актуальным
-  `platform-api2.max.ru`, но из Yandex Cloud он недоступен: TLS падает с
-  `unknown CA` / `unable to get local issuer certificate` — сертификат российского УЦ,
-  которого нет в стандартном `ca-certificates` образа `python:3.11-slim`.
-- Авторизация — **только заголовок** `Authorization: <token>`; query-параметр
-  `?access_token=` отдаёт 401 `verify.token`.
-- **Нет reply-клавиатур** — только inline. Меню собрано на кнопках типа `callback`.
-- Лимит текста 4000 символов (в коде `MAX_MSG_LIMIT = 3900`), rate limit 2 msg/sec на диалог.
-- `POST /answers?callback_id=` одновременно подтверждает нажатие и редактирует сообщение.
-- Событие `bot_started` играет роль первого `/start`; повторное приветствие гасится
-  дедупликацией (окно 5 с).
-- Бот может писать пользователю только после того, как тот открыл диалог (иначе
-  `dialog.not.found` 404).
-- **user_id в MAX другие, чем в Telegram.** Админские ID собираются заново:
-  админ пишет боту `/whoami`, бот возвращает его MAX ID.
-- Диагностика формы запроса: корректный payload на несуществующего адресата даёт
-  404 `dialog.not.found`, а сломанный — 400 `proto.payload` («Can't deserialize body»).
-
-## Специфика Telegram Bot API
-- **С сентября 2026 `api.telegram.org` с российских серверов недоступен вообще** — ТСПУ
-  режет трафик к Telegram на исходящем. Летний пин IPv4 в `extra_hosts` мёртв и из
-  `docker-compose.yml` убран. Webhook не поможет (блок двусторонний), смена облака не
-  поможет (то же у Selectel/Reg.ru).
-- **Блокировка не зависит от нашего IP — проверено 22.09.2026 замером на четырёх ВМ**
-  в разных каталогах и подсетях (`faqbot` 89.169.142.74, `vkr-checker` 89.169.146.175,
-  `vedomost-ai-bot` 111.88.251.184, `tutorai-bot-v2` 89.169.157.225). Результат везде
-  идентичный, вплоть до одинакового времени отсечки ~5.2 с: github.com отдаёт 200,
-  `api.telegram.org` — HTTP 000. Фильтр смотрит на назначение, а не на источник, поэтому
-  **перебор/ротация IP виртуальных машин смысла не имеет** — новый адрес даст тот же
-  результат. Не тратьте на это деньги и не гоняйте создание ВМ пачками: для облачного
-  провайдера это выглядит как злоупотребление и рискует аккаунтом, на котором живут все
-  четыре проекта.
-- **Что нужно для работы Telegram-канала:** внешняя точка доступа к Bot API —
-  `TELEGRAM_RELAY_URL` (`https://<хост>` без пути), бот подставляет её в
-  `Application.builder().base_url()/base_file_url()` (PTB 21.6 сам дописывает токен).
-  База, лог и обращения к AI Studio в любом случае остаются в РФ.
-- ✅ **РАЗВЁРНУТО 23.09.2026:** `https://tg-relay-dpo.leonov-vladimir-hq.workers.dev`
-  (аккаунт `leonov.vladimir.hq@gmail.com`). Telegram-бот `@hse_dpo_faq_bot` поднят через
-  него и работает: `getUpdates … 200 OK`. Деплой — `cd relay && npx wrangler deploy`.
-- **Выбранная реализация — Cloudflare Worker** (`relay/worker.js`), без аренды ВМ:
-  вариант с ВМ в Казахстане заказчик отклонил 22.09.2026. Доступность платформы из
-  Yandex Cloud проверена (`workers.dev` → 0,59 с). Worker проверяет `CF-Connecting-IP`
-  по `ALLOWED_IPS` и номер бота по `ALLOWED_BOT_IDS`; **без этих переменных отвечает 503**
-  (fail closed — иначе открытый прокси к Telegram для всех). Ничего не хранит и не
-  логирует. Развёртывание и лимиты — `relay/README.md`, деплой делает владелец
-  (нужен аккаунт Cloudflare). Логика покрыта оффлайн-тестами, 16 случаев.
-- ⚠️ **Юрисдикция сменилась вместе с решением:** Казахстан был в перечне стран с
-  адекватной защитой ПДн, Cloudflare — американская компания с распределённой сетью,
-  страна обработки конкретного запроса заранее неизвестна. Для юристов это отдельный
-  вопрос сверх уже открытого по ч. 8 ст. 10 149-ФЗ.
-- Только один экземпляр поллера на токен (иначе Telegram отдаёт 409 Conflict).
-
-## Мониторинг: дашборд запросов (только MAX-версия)
-- Дашборд — отдельный сервис на ВМ `vkr-checker`: **http://89.169.146.175:8080**,
-  исходники в `C:\VKR 2\projects-dashboard` (свой репозиторий и свой CLAUDE.md).
-  Логин/пароль — в `.env` дашборда.
-- Бот шлёт события в `POST {DASHBOARD_URL}/api/ingest` с `Authorization: Bearer {DASHBOARD_TOKEN}`
-  через `_dashboard_post()` — **fire-and-forget в фоновом потоке, таймаут 5 с**. Если дашборд
-  лежит или переменные пустые, бот работает как раньше; мониторинг не имеет права его замедлить.
-- Что уходит: каждый вопрос/ответ из `log_question()` (с `latency_ms`, `model`, `dedup_key =
-  user_id:дата_время`), оценка 👍/👎 из `update_last_rating()` (`{"op":"rate"}`), и
-  **эскалация** из `log_escalation()`.
-- **Эскалация к менеджеру** = нажатие кнопки «📞 Связаться с менеджером» (`CB_MANAGER`, в том
-  числе если пользователь набрал подпись кнопки текстом). Событие `event_type: "escalation"`,
-  без текста и оценки. Локально дублируется в **отдельный** `data/escalations_log.csv` —
-  в `questions_log.csv` нельзя: `update_last_rating()` прицепил бы к такой строке оценку
-  следующего ответа. Введено 15.09.2026 по требованию заказчика как отдельная метрика.
-- Не считается эскалацией: автоматический показ контактов менеджера в `MANAGER_PHONES_TEXT`,
-  когда бот сам не нашёл ответ, — это решение бота, а не пользователя.
-
-## Переменные окружения
-Реальные значения — вне репозитория (задаются при деплое в `.env` на сервере).
-
-- **MAX:** `MAX_TOKEN`, `MAX_API_BASE`, `YANDEX_API_KEY`, `YANDEX_BASE_URL`, `MODEL_URI`,
-  `DOCUMENT_PATH`, `LOG_FILE`, `ADMIN_CHAT_ID`, `ADMIN_CHAT_ID_2`,
-  `DASHBOARD_URL`, `DASHBOARD_TOKEN` (опционально `ESCALATION_LOG_FILE`).
-- **Telegram:** то же, но вместо `MAX_TOKEN`/`MAX_API_BASE` — `TELEGRAM_TOKEN` и
-  `TELEGRAM_RELAY_URL` (`https://<хост релея>`, пусто = напрямую); в дашборд не шлёт.
-
-## Инфраструктура (Yandex Cloud)
-- Каталог `project2-chatbotdpo` (`b1gvtru3guuc1oipcs4p`), зона `ru-central1-a`.
-- ВМ `faqbot`, Ubuntu 22.04, 2 vCPU (core-fraction 5) / 1 ГБ RAM / 10 ГБ HDD, swap 2 ГБ.
-  Не preemptible. Внешний IP **93.77.187.243 — статический** (зарезервирован 29.09.2026,
-  адрес `faqbot-static-ip`, `e9bgc9a6nhebh8avds4h`). До этого IP был динамическим и менялся
-  при каждой остановке ВМ (158.160.50.225 → 89.169.142.74 → 93.77.187.243); смена 26.09.2026
-  на три дня уронила Telegram-канал, потому что релей пускает только `ALLOWED_IPS`.
-  **Не снимать резервирование** — иначе проблема вернётся.
-- SSH: `yc-user@93.77.187.243`, ключ `~/.ssh/yc_faqbot_key`.
-- Каталоги на сервере: `/opt/maxbot` (MAX) и `/opt/faqbot` (Telegram).
-- Оба compose-проекта независимы, у каждого свой том `./data` с `questions_log.csv`.
-- Режим long polling — нужен только исходящий доступ, входящих портов не требуется.
-
-## Управление Telegram-каналом
-
-Канал работает с 23.09.2026 через релей. Выключить/включить:
+## Команды
 
 ```bash
-ssh -i ~/.ssh/yc_faqbot_key yc-user@93.77.187.243
-cd /opt/faqbot && sudo docker compose stop     # выключить (MAX не затрагивается)
-cd /opt/faqbot && sudo docker compose start    # включить обратно
-sudo docker logs -f faqbot                     # «Telegram Bot API через релей: …», getUpdates 200
+# деплой файла (пример для MAX; для Telegram — /opt/faqbot)
+scp -i ~/.ssh/yc_faqbot_key maxbot/maxbot.py yc-user@93.77.187.243:/tmp/max_maxbot.py
+ssh ... 'cd /opt/maxbot && cp maxbot.py maxbot.py.bak-<метка> && cp /tmp/max_maxbot.py maxbot.py \
+         && md5sum maxbot.py && sudo docker compose up -d --build'
+sudo docker ps; sudo docker logs --since 1m maxbot          # проверка после деплоя
+cd relay && npx wrangler deploy                              # релей (из папки relay/)
+python -m py_compile bot.py maxbot/maxbot.py                 # минимальная проверка перед деплоем
 ```
 
-`docker compose stop` сохраняет контейнер, образ `faqbot:latest`, `.env` с токеном и
-CSV-лог. При этом `restart: unless-stopped` + ручная остановка = контейнер **не поднимется
-сам** после перезагрузки ВМ, это ожидаемо.
+После деплоя бота проверить в логе: «Документ загружен: FAQ_DPO_HSE_v5.docx», «Бот запущен»,
+для Telegram — `getUpdates … 200 OK`. Если меняли промпт/FAQ — прогнать вопросы через
+`sudo docker exec maxbot python -c 'import maxbot; print(maxbot.ask_question("…", []))'`
+(импорт не запускает поллинг — `main` под `if __name__ == "__main__"`).
 
-**Если канал перестал работать:**
-- **`TelegramError: Invalid server response`, `faqbot` в цикле Restarting** — релей отвечает
-  403 текстом («этот IP не в списке разрешённых»), PTB не может разобрать его как JSON.
-  Значит, IP ВМ не совпадает с `ALLOWED_IPS` (статический IP сняли или ВМ пересоздали):
-  поправить `ALLOWED_IPS` в `relay/wrangler.toml` и передеплоить Worker
-  (`cd relay && npx wrangler deploy`). Быстрая проверка с ВМ:
-  `curl https://tg-relay-dpo.leonov-vladimir-hq.workers.dev/check` — 403 = IP не пускают,
-  404 «Ожидается путь…» = IP в порядке.
-- **wrangler: «In a non-interactive environment, it's necessary to set a CLOUDFLARE_API_TOKEN»** —
-  истёк OAuth-токен. `npx wrangler whoami` его обновляет, после этого `deploy` проходит.
-- **Релей недоступен** — `faqbot` уйдёт в перезапуск по `restart: unless-stopped`;
-  MAX-бот (`maxbot`) это не затрагивает, контейнеры независимы.
-- **409 Conflict** — где-то запущен второй поллер на том же токене; должен быть один.
-- Токен BotFather от простоя не протухает.
-- Полный откат: убрать `TELEGRAM_RELAY_URL` из `.env` — бот пойдёт напрямую
-  (сейчас не работает, но код прежний).
+## Обязательные правила
+1. **Сервер может отличаться от репозитория** — его меняли и другие сессии. Перед правкой
+   сверить md5 серверного файла с локальным; если расходятся — сначала разобраться.
+2. **Заливка на сервер:** уникальные имена во `/tmp` (`tg_bot.py`, `max_maxbot.py` — один раз
+   перепутали одноимённые файлы), бэкап `*.bak-<метка>` рядом, сверка md5 после копирования.
+3. **FAQ — в трёх местах:** `FAQ_DPO_HSE_v5.docx` в корне и в `maxbot/` (каждая папка —
+   отдельный Docker-контекст) + публичная копия на Яндекс Диске (ссылка в приветствии и
+   кнопке FAQ, по 2 места в `bot.py` и `maxbot.py`). Меняешь базу — меняй все три.
+4. **Репозиторий публичный.** Секреты — только в `.env` на сервере. Не коммитить `.env`,
+   ключи, ID администраторов, логи. `.wrangler/` в `.gitignore`.
+5. **152-ФЗ:** логи (`/opt/*/data/*.csv`) содержат ФИО и user_id — хранить в РФ, не в git
+   и не в иностранных облаках. Релей ничего не хранит и не логирует.
+6. **Старый VPS 206.251.48.91** — не трогать (там чужие контейнеры). Снос — только по явному «ок».
+7. Платные действия в облаке (новые ВМ, адреса, ресурсы) — только с согласия владельца.
+8. Коммиты — маленькие, на русском, в конце `Co-Authored-By: Claude …`.
 
-**Юридически не закрыто:** заключение по ч. 8 ст. 10 149-ФЗ и уведомление РКН о
-трансграничной передаче (ОАЭ — Telegram, США — Cloudflare). Канал уже запущен по
-решению заказчика; при отрицательном заключении выключается командой выше.
+## Модель (Qwen 3.6 35B)
+- Модель «с размышлениями»: **всегда** `extra_body={"reasoning_effort": "none"}`, иначе пустой
+  `content` (`finish_reason=length`).
+- Qwen в AI Studio включается **для каждого каталога отдельно**, иначе 403 даже с ролью editor.
+- `SYSTEM_PROMPT` одинаковый в обоих ботах — правишь один, правь и второй.
+- `suggest_reformulations()` — JSON-режим (`response_format`), подбирает до 3 вопросов из FAQ.
 
-## Безопасность
-- Секреты (токены ботов, API-ключ, chat_id админов) — только в `.env` на сервере,
-  никогда в репозитории. `.env` закрыт `.gitignore`.
-- Ключ сервисного аккаунта Yandex Cloud (`leonov-deployer-key.json`) хранится локально
-  и в репозиторий не попадает.
+## Продуктовые правила (согласованы с заказчиком)
+- **Каталог программ — только Школы:** `https://www.hse.ru/edu/dpo/?orgUnit=122999271`.
+  Общий `hse.ru/edu/dpo/` запрещён и в FAQ, и в промпте.
+- **Эскалация** = нажатие «📞 Связаться с менеджером» (`CB_MANAGER`, в т.ч. подпись, набранная
+  текстом). Пишется в отдельный `escalations_log.csv` — **не** в `questions_log.csv`
+  (`update_last_rating()` прицепит к ней оценку). Автопоказ контактов при «нет ответа» — не эскалация.
+- **«◀️ Назад в меню»** — на каждом последнем сообщении бота в MAX (кнопки живут только на своём
+  сообщении; `attachments: []` стирает все кнопки).
+- Подписи кнопок MAX: лимит API 64 символа, на телефоне видно ~26–28. Старые длинные подписи,
+  набранные текстом, бот по-прежнему понимает (`BTN_ASK_LEGACY`).
+- Подсказки «возможно, вы хотели спросить» — callback-кнопки `sug:<idx>:<sha1[:6]>`; после
+  списка подсказок оценку не спрашивать.
+- Контакт менеджера в MAX — по номеру +7 916 211 19 67 (у личных аккаунтов MAX нет ссылок).
+  Не отправлять пользователей в Telegram из MAX-бота.
+
+## MAX — коротко (подробно в maxbot/README.md)
+- Домен **только `https://botapi.max.ru`**; `platform-api2.max.ru` — TLS `unknown CA`.
+- Токен — только заголовком `Authorization: <token>` (query → 401 `verify.token`).
+- Только inline-кнопки; лимит текста 4000 (`MAX_MSG_LIMIT = 3900`); 2 сообщения/с на диалог.
+- `bot_started` = первый `/start`; повтор гасится дедупликацией 5 с.
+- Бот пишет только тем, кто открыл диалог (иначе 404 `dialog.not.found`) — так же и админам.
+- `PATCH /me` (установка команд) с 2026-09-29 отвечает 404 `method.not.found` — бот логирует
+  предупреждение и работает дальше; чинить не обязательно.
+
+## Telegram и релей — коротко (подробно в relay/README.md)
+- `api.telegram.org` из РФ недоступен; перебор IP/ВМ **бесполезен** (проверено, см. DECISIONS).
+- `TELEGRAM_RELAY_URL` → `Application.builder().base_url()/base_file_url()`; PTB сам
+  дописывает `bot<token>`.
+- Worker пускает только `ALLOWED_IPS` (= IP ВМ) и `ALLOWED_BOT_IDS` (8709764083); без них 503.
+- Симптом «IP не пускают»: `faqbot` Restarting + `TelegramError: Invalid server response`
+  (релей отвечает 403 текстом, PTB ждёт JSON).
+- Один поллер на токен, иначе 409. Telegram-версия в дашборд не шлёт.
+
+## Дашборд
+- `http://89.169.146.175:8080`, отдельный проект `C:\VKR 2\projects-dashboard` (свой CLAUDE.md).
+- MAX-бот шлёт `POST {DASHBOARD_URL}/api/ingest` (`Bearer DASHBOARD_TOKEN`) через
+  `_dashboard_post()` — фоновый поток, таймаут 5 с. Мониторинг не имеет права тормозить бота.
+- События: вопрос/ответ (`dedup_key = user_id:дата_время`), оценка (`{"op":"rate"}`), `event_type: "escalation"`.
+
+## Среда (Windows, Claude Code)
+- Bash — Git Bash: кириллица в путях ломает Python (`C:\Users\Владимир\...`) — работать с копиями
+  в ASCII-путях или через PowerShell. В Bash `~/.ssh/known_hosts` недоступен — добавлять
+  `-o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null`.
+- Авто-режим иногда блокирует Bash-команды про релей («Traffic Redirection»); PowerShell проходит.
+- `wrangler`: «non-interactive… CLOUDFLARE_API_TOKEN» = истёк OAuth → `npx wrangler whoami` обновляет.
