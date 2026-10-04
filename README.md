@@ -104,7 +104,7 @@ cd /opt/maxbot && sudo docker compose up -d --build
 
 | Задача | Как |
 |---|---|
-| **Обновить FAQ** | Заменить `FAQ_DPO_HSE_v5.docx` в корне и в `maxbot/` → залить в `/opt/faqbot/` и `/opt/maxbot/` → пересобрать оба контейнера → перезалить файл на Яндекс Диске |
+| **Обновить FAQ** | Править `FAQ_DPO_HSE_v5.docx` **в Word**, заменить в корне и в `maxbot/` → залить в `/opt/faqbot/` и `/opt/maxbot/` → пересобрать оба контейнера → перезалить файл на Яндекс Диске. ⚠️ Файл, скачанный из Яндекс Документов, боту не подходит: ссылки в нём сохранены в формате, который бот не читает |
 | **Добавить администратора** | MAX: админ пишет боту `/whoami`, ID вписать в `ADMIN_CHAT_ID_2` в `/opt/maxbot/.env` → `sudo docker compose up -d`. ID в MAX и Telegram разные |
 | **Выключить / включить Telegram** | `cd /opt/faqbot && sudo docker compose stop` / `start`. MAX не затрагивается |
 | **Сменить модель** | `MODEL_URI` в `.env` → `sudo docker compose up -d` |
